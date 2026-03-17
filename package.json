@@ -1,0 +1,27 @@
+{
+  "name": "ceo-mentor-agent",
+  "version": "2.0.0",
+  "description": "Atlas - CEO Mentor AI Agent via WhatsApp (Kapso + Supabase + Railway)",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@kapso/whatsapp-cloud-api": "^0.1.1",
+    "@supabase/supabase-js": "^2.49.1",
+    "express": "^4.21.1",
+    "node-cron": "^3.0.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
