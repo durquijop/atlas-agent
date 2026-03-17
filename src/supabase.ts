@@ -14,6 +14,7 @@ function getClient(): SupabaseClient {
 const AGENTE_ID = 100;
 const EMPRESA_ID = 13; // Urpe Ai Lab
 const NUMERO_ID = 62;
+const URPE_INTEGRAL_ID = 4; // URPE Integral Services
 
 export interface ConversationMessage {
   role: 'user' | 'assistant';
@@ -161,17 +162,160 @@ export async function updateSessionContext(_phone: string, _context: Record<stri
 
 // ── Business data ──
 
+function todayStart(): string {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+
+function weekStart(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - d.getDay() + 1); // Monday
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+
+function monthStart(): string {
+  const d = new Date();
+  d.setDate(1);
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+
 export async function getBusinessSnapshot(): Promise<Record<string, unknown>> {
   const db = getClient();
   const snapshot: Record<string, unknown> = {};
+  const today = todayStart();
+  const week = weekStart();
+  const month = monthStart();
 
+  // ── URPE Integral Services (empresa_id=4) ──
+
+  // Citas hoy
+  try {
+    const { data: citasHoy } = await db
+      .from('wp_citas')
+      .select('id, estado, titulo, fecha_hora')
+      .eq('empresa_id', URPE_INTEGRAL_ID)
+      .gte('fecha_hora', today)
+      .lt('fecha_hora', new Date(Date.now() + 86400000).toISOString())
+      .order('fecha_hora', { ascending: true });
+
+    snapshot.citas_hoy = citasHoy || [];
+    snapshot.citas_hoy_total = citasHoy?.length || 0;
+  } catch (_) {}
+
+  // Citas esta semana por estado
+  try {
+    const { data: citasSemana } = await db
+      .from('wp_citas')
+      .select('estado')
+      .eq('empresa_id', URPE_INTEGRAL_ID)
+      .gte('fecha_hora', week);
+
+    const estadoCount: Record<string, number> = {};
+    for (const c of citasSemana || []) {
+      estadoCount[c.estado] = (estadoCount[c.estado] || 0) + 1;
+    }
+    snapshot.citas_semana = estadoCount;
+    snapshot.citas_semana_total = citasSemana?.length || 0;
+  } catch (_) {}
+
+  // Citas este mes por estado
+  try {
+    const { data: citasMes } = await db
+      .from('wp_citas')
+      .select('estado')
+      .eq('empresa_id', URPE_INTEGRAL_ID)
+      .gte('fecha_hora', month);
+
+    const estadoCount: Record<string, number> = {};
+    for (const c of citasMes || []) {
+      estadoCount[c.estado] = (estadoCount[c.estado] || 0) + 1;
+    }
+    snapshot.citas_mes = estadoCount;
+    snapshot.citas_mes_total = citasMes?.length || 0;
+  } catch (_) {}
+
+  // Conversaciones (leads) hoy por canal
+  try {
+    const { data: convsHoy } = await db
+      .from('wp_conversaciones')
+      .select('canal')
+      .eq('empresa_id', URPE_INTEGRAL_ID)
+      .gte('fecha_inicio', today);
+
+    const canalCount: Record<string, number> = {};
+    for (const c of convsHoy || []) {
+      canalCount[c.canal || 'desconocido'] = (canalCount[c.canal || 'desconocido'] || 0) + 1;
+    }
+    snapshot.leads_hoy = canalCount;
+    snapshot.leads_hoy_total = convsHoy?.length || 0;
+  } catch (_) {}
+
+  // Conversaciones (leads) esta semana por canal
+  try {
+    const { data: convsSemana } = await db
+      .from('wp_conversaciones')
+      .select('canal')
+      .eq('empresa_id', URPE_INTEGRAL_ID)
+      .gte('fecha_inicio', week);
+
+    const canalCount: Record<string, number> = {};
+    for (const c of convsSemana || []) {
+      canalCount[c.canal || 'desconocido'] = (canalCount[c.canal || 'desconocido'] || 0) + 1;
+    }
+    snapshot.leads_semana = canalCount;
+    snapshot.leads_semana_total = convsSemana?.length || 0;
+  } catch (_) {}
+
+  // Conversaciones (leads) este mes por canal
+  try {
+    const { data: convsMes } = await db
+      .from('wp_conversaciones')
+      .select('canal')
+      .eq('empresa_id', URPE_INTEGRAL_ID)
+      .gte('fecha_inicio', month);
+
+    const canalCount: Record<string, number> = {};
+    for (const c of convsMes || []) {
+      canalCount[c.canal || 'desconocido'] = (canalCount[c.canal || 'desconocido'] || 0) + 1;
+    }
+    snapshot.leads_mes = canalCount;
+    snapshot.leads_mes_total = convsMes?.length || 0;
+  } catch (_) {}
+
+  // Contactos nuevos este mes
+  try {
+    const { count } = await db
+      .from('wp_contactos')
+      .select('id', { count: 'exact', head: true })
+      .eq('empresa_id', URPE_INTEGRAL_ID)
+      .gte('created_at', month);
+    snapshot.contactos_nuevos_mes = count || 0;
+  } catch (_) {}
+
+  // Total contactos activos
+  try {
+    const { count } = await db
+      .from('wp_contactos')
+      .select('id', { count: 'exact', head: true })
+      .eq('empresa_id', URPE_INTEGRAL_ID)
+      .eq('is_active', true);
+    snapshot.contactos_activos_total = count || 0;
+  } catch (_) {}
+
+  // ── Urpe AI Lab (empresa_id=13) ──
   try {
     const { count } = await db
       .from('wp_conversaciones')
       .select('id', { count: 'exact', head: true })
       .eq('empresa_id', EMPRESA_ID);
-    snapshot.total_conversations = count || 0;
+    snapshot.ai_lab_conversaciones_total = count || 0;
   } catch (_) {}
+
+  snapshot.timestamp = new Date().toISOString();
+  snapshot.empresa = 'URPE Integral Services + Urpe AI Lab';
 
   return snapshot;
 }
