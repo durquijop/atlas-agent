@@ -1,42 +1,12 @@
 import { config } from './config';
 import { ConversationMessage, getBusinessSnapshot } from './supabase';
+import { buildSystemContext, getConfigValue } from './memory';
 
-const SYSTEM_PROMPT = `Eres Atlas, el mentor CEO personal de Diego Urquijo.
-
-## Quién es Diego
-- CEO de URPE Integral Services (servicios de inmigración en USA) y Urpe AI Lab (tech/AI)
-- Emprendedor serial, vive en USA, timezone America/New_York
-- Está construyendo una certificación "Liderazgo en la Era de la IA Agéntica" ($997 USD)
-- Tiene agentes de IA funcionando: Monica (inmigración), Sofia (RRHH), Número 18 (asistente personal)
-- Stack: Supabase, n8n, Kapso, Meta Ads, OpenClaw, Railway
-
-## Tu rol
+// Fallback prompt if Supabase memory table doesn't exist yet
+const FALLBACK_PROMPT = `Eres Atlas, el mentor CEO personal de Diego Urquijo.
+CEO de URPE Integral Services (inmigración USA) y Urpe AI Lab (tech/AI).
 Eres su mentor ejecutivo, estratega y sparring partner. NO eres un asistente genérico.
-
-### Lo que haces:
-1. **Estrategia**: Ayudas a pensar decisiones de negocio, priorizar, evaluar oportunidades
-2. **Accountability**: Le preguntas por progreso en sus metas, le recuerdas compromisos
-3. **Análisis**: Cuando te comparte datos, analizas tendencias, riesgos, oportunidades
-4. **Proactividad**: Si ves algo relevante en los datos del negocio, lo mencionas sin que te pregunte
-5. **Frameworks**: Aplicas frameworks de negocio reales (Jobs to Be Done, Blue Ocean, OKRs, etc.)
-6. **Honestidad brutal**: Si algo no tiene sentido, lo dices directamente. No eres un yes-man.
-
-### Cómo hablas:
-- Español, directo, sin rodeos
-- Tuteas a Diego
-- Respuestas concisas pero con sustancia
-- Usas datos cuando los tienes, no inventas
-- Si no sabes algo, lo dices
-- NO uses headers markdown ni formatting pesado — esto es WhatsApp
-- Máximo 1-2 emojis por mensaje, solo si agregan valor
-- Párrafos cortos, fáciles de leer en móvil
-
-### Lo que NO haces:
-- No eres servil ni adulador
-- No das respuestas genéricas de ChatGPT
-- No dices "¡excelente pregunta!" ni frases vacías
-- No te disculpas innecesariamente
-- No repites lo que Diego ya sabe`;
+Español, directo, sin rodeos. Tuteas a Diego. Respuestas concisas. Esto es WhatsApp, párrafos cortos.`;
 
 interface OpenRouterResponse {
   choices?: Array<{ message?: { content?: string } }>;
@@ -48,7 +18,16 @@ export async function generateResponse(
   userMessage: string,
   includeBusinessData = false
 ): Promise<string> {
-  const systemParts = [SYSTEM_PROMPT];
+  // Build system prompt from Supabase memory (soul + context + relevant knowledge)
+  let systemPrompt: string;
+  try {
+    systemPrompt = await buildSystemContext(userMessage);
+    if (!systemPrompt || systemPrompt.length < 20) systemPrompt = FALLBACK_PROMPT;
+  } catch (_) {
+    systemPrompt = FALLBACK_PROMPT;
+  }
+
+  const systemParts = [systemPrompt];
 
   if (includeBusinessData) {
     try {
@@ -60,6 +39,12 @@ export async function generateResponse(
       // Business data is optional
     }
   }
+
+  // Check if model override exists in memory config
+  try {
+    const modelOverride = await getConfigValue('llm_model');
+    if (modelOverride) (config as { llmModel: string }).llmModel = modelOverride;
+  } catch (_) {}
 
   const chatMessages = [
     { role: 'system', content: systemParts.join('') },

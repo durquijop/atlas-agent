@@ -2,6 +2,7 @@ import { config } from './config';
 import { getOrCreateSession, getRecentMessages, saveMessage, updateSessionContext } from './supabase';
 import { generateResponse } from './llm';
 import { sendText, markAsRead } from './whatsapp';
+import { handleCommand } from './commands';
 
 const POLL_INTERVAL_MS = 5000;
 const KAPSO_BASE = 'https://app.kapso.ai/api/meta/v21.0';
@@ -74,6 +75,14 @@ async function processMessage(msg: KapsoMsg): Promise<void> {
 
   try {
     try { await markAsRead(msg.id); } catch (_) {}
+
+    // Check for commands first (no LLM tokens used)
+    const cmd = await handleCommand(text);
+    if (cmd.handled && cmd.response) {
+      await sendText(from, cmd.response);
+      console.log(`[poller] Command handled: ${text.slice(0, 30)}`);
+      return;
+    }
 
     const contactName = msg.kapso?.contact_name;
     await getOrCreateSession(from, contactName);
