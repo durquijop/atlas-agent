@@ -4,6 +4,7 @@ import { generateResponse } from './llm';
 import { sendText, markAsRead } from './whatsapp';
 import { handleCommand } from './commands';
 import { triggerMemoryUpdate } from './agents/memory-agent';
+import { detectResearchIntent, research, formatResearchForWhatsApp } from './agents/research-agent';
 
 // Trigger memory update after every N messages from Diego
 const MEMORY_TRIGGER_EVERY = 5;
@@ -93,6 +94,26 @@ async function processMessage(msg: KapsoMsg): Promise<void> {
     await getOrCreateSession(from, contactName);
     const history = await getRecentMessages(from);
     await saveMessage(from, 'user', text);
+
+    // Check if Diego wants research
+    const researchIntent = detectResearchIntent(text);
+    if (researchIntent) {
+      console.log(`[poller] Research intent detected: "${researchIntent.query}" (${researchIntent.type})`);
+      // Send quick acknowledgment
+      await sendText(from, `Investigando "${researchIntent.query}"... dame un momento.`);
+      
+      try {
+        const result = await research(researchIntent);
+        const researchMsg = formatResearchForWhatsApp(result);
+        await saveMessage(from, 'assistant', researchMsg);
+        await sendText(from, researchMsg);
+        console.log(`[poller] Research delivered: ${result.confidence} confidence`);
+        return;
+      } catch (e) {
+        console.error('[poller] Research failed:', e);
+        // Fall through to normal LLM response
+      }
+    }
 
     const includeData = shouldIncludeBusinessData(text);
     const response = await generateResponse(history, text, includeData);
