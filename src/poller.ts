@@ -5,6 +5,7 @@ import { sendText, markAsRead } from './whatsapp';
 import { handleCommand } from './commands';
 import { triggerMemoryUpdate } from './agents/memory-agent';
 import { detectResearchIntent, research, formatResearchForWhatsApp } from './agents/research-agent';
+import { detectComposerIntent, compose, formatComposerForWhatsApp } from './agents/composer';
 
 // Trigger memory update after every N messages from Diego
 const MEMORY_TRIGGER_EVERY = 5;
@@ -117,6 +118,28 @@ async function processMessage(msg: KapsoMsg): Promise<void> {
     } catch (e) {
       console.error('[poller] Research intent detection failed:', e);
       // Fall through to normal LLM response
+    }
+
+    // Check if Diego wants content composed
+    try {
+      const composerIntent = detectComposerIntent(text);
+      if (composerIntent) {
+        console.log(`[poller] Composer intent detected: task=${composerIntent.task}`);
+        await sendText(from, `Redactando ${composerIntent.task}...`);
+
+        try {
+          const result = await compose(composerIntent);
+          const composerMsg = formatComposerForWhatsApp(result);
+          await saveMessage(from, 'assistant', composerMsg);
+          await sendText(from, composerMsg);
+          console.log(`[poller] Composer delivered: ${result.wordCount} words`);
+          return;
+        } catch (e) {
+          console.error('[poller] Composer failed, falling back to LLM:', e);
+        }
+      }
+    } catch (e) {
+      console.error('[poller] Composer intent detection failed:', e);
     }
 
     const includeData = shouldIncludeBusinessData(text);
