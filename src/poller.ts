@@ -96,23 +96,27 @@ async function processMessage(msg: KapsoMsg): Promise<void> {
     await saveMessage(from, 'user', text);
 
     // Check if Diego wants research
-    const researchIntent = detectResearchIntent(text);
-    if (researchIntent) {
-      console.log(`[poller] Research intent detected: "${researchIntent.query}" (${researchIntent.type})`);
-      // Send quick acknowledgment
-      await sendText(from, `Investigando "${researchIntent.query}"... dame un momento.`);
-      
-      try {
-        const result = await research(researchIntent);
-        const researchMsg = formatResearchForWhatsApp(result);
-        await saveMessage(from, 'assistant', researchMsg);
-        await sendText(from, researchMsg);
-        console.log(`[poller] Research delivered: ${result.confidence} confidence`);
-        return;
-      } catch (e) {
-        console.error('[poller] Research failed:', e);
-        // Fall through to normal LLM response
+    try {
+      const researchIntent = detectResearchIntent(text);
+      if (researchIntent && process.env.FIRECRAWL_API_KEY) {
+        console.log(`[poller] Research intent detected: "${researchIntent.query}" (${researchIntent.type})`);
+        await sendText(from, `Investigando "${researchIntent.query}"... dame un momento.`);
+        
+        try {
+          const result = await research(researchIntent);
+          const researchMsg = formatResearchForWhatsApp(result);
+          await saveMessage(from, 'assistant', researchMsg);
+          await sendText(from, researchMsg);
+          console.log(`[poller] Research delivered: ${result.confidence} confidence`);
+          return;
+        } catch (e) {
+          console.error('[poller] Research failed, falling back to LLM:', e);
+          // Fall through to normal LLM response
+        }
       }
+    } catch (e) {
+      console.error('[poller] Research intent detection failed:', e);
+      // Fall through to normal LLM response
     }
 
     const includeData = shouldIncludeBusinessData(text);
