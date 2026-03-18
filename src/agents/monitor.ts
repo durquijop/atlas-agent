@@ -24,15 +24,54 @@ const GMAIL_ACCOUNTS = [
   { email: 'du@soydiegoup.com', label: 'SoyDiegoUp' },
 ];
 
-// Priority keywords in subject/sender for email classification
-const CRITICAL_KEYWORDS = ['urgent', 'urgente', 'overdue', 'vencida', 'shutdown', 'suspended', 'crashed', 'failed', 'payment failure', 'action required'];
-const HIGH_KEYWORDS = ['invoice', 'factura', 'payment', 'pago', 'renewal', 'renovacion', 'expir', 'deadline'];
+// ── Email classification — umbral alto, solo lo que realmente importa ──
+
+// CRITICAL: requiere acción HOY o hay pérdida real
+const CRITICAL_KEYWORDS = [
+  'urgent', 'urgente', 'overdue', 'vencida', 'shutdown', 'suspended',
+  'crashed', 'failed', 'payment failure', 'action required', 'account suspended',
+  'service interrupted', 'pago rechazado', 'cuenta bloqueada', 'factura vencida',
+  'your account', 'immediate action', 'acción inmediata'
+];
+
+// HIGH: dinero o deadline concreto
+const HIGH_KEYWORDS = [
+  'invoice', 'factura', 'payment due', 'pago vence', 'renewal', 'renovacion',
+  'expires', 'expira', 'deadline', 'vence mañana', 'overdue', 'past due',
+  'subscription', 'suscripcion', 'cobro', 'cargo rechazado'
+];
+
+// AUTO-DESCARTE: newsletters, marketing, notificaciones automáticas
+const NOISE_SENDERS = [
+  'noreply', 'no-reply', 'newsletter', 'notifications@', 'updates@',
+  'hello@', 'team@', 'info@', 'marketing@', 'digest@', 'weekly@',
+  'acm.org', 'ieee.org', 'medium.com', 'substack.com', 'mailchimp',
+  'constantcontact', 'sendgrid', 'klaviyo', 'hubspot', 'mailerlite'
+];
+
+const NOISE_SUBJECTS = [
+  'newsletter', 'digest', 'weekly', 'roundup', 'update', 'webinar',
+  'invitation', 'join us', 'free', 'offer', 'deal', 'discount',
+  'unsubscribe', 'referral', 'you\'re invited', 'don\'t miss'
+];
 
 function classifyEmailPriority(subject: string, from: string): 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' {
   const text = `${subject} ${from}`.toLowerCase();
+  const subjectLower = subject.toLowerCase();
+  const fromLower = from.toLowerCase();
+
+  // Auto-descarte: ruido conocido
+  if (NOISE_SENDERS.some(n => fromLower.includes(n))) return 'LOW';
+  if (NOISE_SUBJECTS.some(n => subjectLower.includes(n))) return 'LOW';
+
+  // CRITICAL: acción urgente requerida
   if (CRITICAL_KEYWORDS.some(k => text.includes(k))) return 'CRITICAL';
+
+  // HIGH: dinero o deadline
   if (HIGH_KEYWORDS.some(k => text.includes(k))) return 'HIGH';
-  return 'MEDIUM';
+
+  // Todo lo demás es LOW — no vale molestar a Diego
+  return 'LOW';
 }
 
 

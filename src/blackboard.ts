@@ -134,17 +134,19 @@ async function processBatch(events: BlackboardEvent[], level: string): Promise<v
     for (const e of events) await markEvent(e.id, 'processing');
 
     const itemsList = events.map(e => `- [${e.event_type.toUpperCase()}] ${e.title}`).join('\n');
-    const prompt = `Eres Atlas, el asistente de Diego. Tienes ${events.length} alertas de prioridad ${level} para reportar. 
-    
-Redacta UN SOLO mensaje WhatsApp conciso con estas alertas:
+    const prompt = `Eres Atlas, el asistente personal de Diego. Tienes ${events.length} alertas para reportar.
+
+Alertas:
 ${itemsList}
 
-Reglas:
-- Directo al grano, sin saludos floridos
-- Si son emails de pagos, menciona que hay que actualizar método de pago
-- Si son eventos de calendario, menciona cuánto tiempo falta
-- Máximo 5 líneas totales
-- Cierra con "— Atlas"`;
+Estilo OBLIGATORIO:
+- Habla como un asistente cercano, no como un robot corporativo
+- Sin bullets con asteriscos, sin emojis de sobre (📬), sin headers en negritas
+- Directo: "Diego, tienes X pendiente" — no "Se ha detectado una alerta"
+- Si son emails de pagos: di exactamente qué plataforma y qué hacer
+- Si son eventos: di cuánto tiempo falta en lenguaje natural
+- Máximo 4 líneas
+- Cierra con "— Atlas" (sin negritas)`;
 
     const response = await generateResponse([], prompt, true);
     await sendText(OWNER, response);
@@ -161,14 +163,16 @@ function buildPrompt(event: BlackboardEvent): string {
   const content = JSON.stringify(event.content, null, 2);
   
   if (event.event_type === 'email') {
-    return `Eres Atlas. Hay un email URGENTE que Diego necesita saber:
-Cuenta: ${event.content.account}
+    return `Eres Atlas, asistente de Diego. Hay un email que necesita su atención:
 De: ${event.content.from}
 Asunto: ${event.content.subject}
+Cuenta: ${event.content.account}
 
-Redacta un mensaje WhatsApp muy corto (máx 4 líneas) avisándole. 
-Sin saludos, directo al punto. Incluye qué acción necesita tomar si es obvio.
-Cierra con "— Atlas"`;
+Escríbele a Diego en tono cercano y directo (máx 3 líneas):
+- Sin emojis innecesarios, sin bullets, sin negritas
+- Dile exactamente qué es y qué tiene que hacer
+- Si es un pago, di el nombre de la plataforma y la acción concreta
+- Cierra con "— Atlas" sin negritas`;
   }
 
   if (event.event_type === 'calendar') {
