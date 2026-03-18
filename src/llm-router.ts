@@ -16,18 +16,20 @@ import { config } from './config';
 
 export type AgentRole = 'orchestrator' | 'critic' | 'research' | 'memory' | 'monitor';
 
+const OPUS = 'anthropic/claude-opus-4.6';
+
 const MODEL_MAP: Record<AgentRole, string> = {
-  orchestrator: 'anthropic/claude-sonnet-4.5',
-  critic: 'anthropic/claude-haiku-3.5',
-  research: 'google/gemini-2.0-flash-001',    // Rápido + bueno para síntesis
-  memory: 'anthropic/claude-sonnet-4.5',
-  monitor: 'anthropic/claude-haiku-3.5',
+  orchestrator: OPUS,
+  critic: OPUS,
+  research: OPUS,
+  memory: OPUS,
+  monitor: OPUS,
 };
 
 const MAX_TOKENS_MAP: Record<AgentRole, number> = {
   orchestrator: 1024,
-  critic: 512,     // Critic solo devuelve JSON corto
-  research: 2048,  // Research necesita más tokens para síntesis
+  critic: 512,
+  research: 2048,
   memory: 1024,
   monitor: 512,
 };
