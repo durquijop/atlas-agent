@@ -19,7 +19,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { config } from '../config';
-import { generateResponse } from '../llm';
+import { callLLM } from '../llm-router';
 
 const supabase = createClient(config.supabaseUrl, config.supabaseKey);
 
@@ -226,11 +226,10 @@ Responde en JSON exacto:
 - low: información escasa, no verificable, o muy general`;
 
   try {
-    const response = await generateResponse(
-      [{ role: 'user' as const, content: synthesisPrompt }],
-      'Eres el Research Agent de Atlas. Sintetizas información de forma precisa y accionable para Diego Urquijo.',
-      false
-    );
+    const response = await callLLM('research', [
+      { role: 'system', content: 'Eres el Research Agent de Atlas. Sintetizas información de forma precisa y accionable para Diego Urquijo. Responde SOLO con el JSON solicitado, sin texto adicional.' },
+      { role: 'user', content: synthesisPrompt },
+    ], { maxTokens: 2048 });
 
     const jsonMatch = response.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('No JSON in response');

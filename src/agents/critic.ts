@@ -12,7 +12,7 @@
  * Nunca habla con Diego directamente.
  */
 
-import { generateResponse } from '../llm';
+import { callLLM } from '../llm-router';
 
 export type CriticVerdict = 'APPROVED' | 'REFORMULATED' | 'BLOCKED';
 
@@ -87,11 +87,10 @@ ${context.recentRejects?.length ? `- Últimas acciones rechazadas por Diego en e
 Toma tu decisión y responde en JSON.`;
 
   try {
-    const response = await generateResponse(
-      [{ role: 'user' as const, content: userPrompt }],
-      CRITIC_SYSTEM_PROMPT,
-      false // No es proactivo, no envía directamente
-    );
+    const response = await callLLM('critic', [
+      { role: 'system', content: CRITIC_SYSTEM_PROMPT },
+      { role: 'user', content: userPrompt },
+    ], { temperature: 0.1 }); // Baja temperatura para decisiones consistentes
 
     // Parse JSON response
     const jsonMatch = response.match(/\{[\s\S]*\}/);

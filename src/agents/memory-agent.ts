@@ -17,7 +17,7 @@
 import cron from 'node-cron';
 import { createClient } from '@supabase/supabase-js';
 import { config } from '../config';
-import { generateResponse } from '../llm';
+import { callLLM } from '../llm-router';
 
 const supabase = createClient(config.supabaseUrl, config.supabaseKey);
 
@@ -258,11 +258,10 @@ ${existingMemorySnapshot}
 Extrae lo que vale la pena recordar. Responde en JSON.`;
 
   try {
-    const response = await generateResponse(
-      [{ role: 'user' as const, content: prompt }],
-      MEMORY_EXTRACTION_PROMPT,
-      false
-    );
+    const response = await callLLM('memory', [
+      { role: 'system', content: MEMORY_EXTRACTION_PROMPT },
+      { role: 'user', content: prompt },
+    ]);
 
     const jsonMatch = response.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return { semantic_updates: [], episodic_summary: null, behavior_updates: [] };
