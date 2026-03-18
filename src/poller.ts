@@ -3,6 +3,11 @@ import { getOrCreateSession, getRecentMessages, saveMessage, updateSessionContex
 import { generateResponse } from './llm';
 import { sendText, markAsRead } from './whatsapp';
 import { handleCommand } from './commands';
+import { triggerMemoryUpdate } from './agents/memory-agent';
+
+// Trigger memory update after every N messages from Diego
+const MEMORY_TRIGGER_EVERY = 5;
+let messagesSinceLastMemoryUpdate = 0;
 
 const POLL_INTERVAL_MS = 5000;
 const KAPSO_BASE = 'https://app.kapso.ai/api/meta/v21.0';
@@ -97,6 +102,16 @@ async function processMessage(msg: KapsoMsg): Promise<void> {
     await sendText(from, response);
 
     console.log(`[poller] Sent ${response.length} chars to ${from}`);
+
+    // Trigger Memory Agent every 5 messages to capture new context
+    messagesSinceLastMemoryUpdate++;
+    if (messagesSinceLastMemoryUpdate >= MEMORY_TRIGGER_EVERY) {
+      messagesSinceLastMemoryUpdate = 0;
+      const fullHistory = await getRecentMessages(from, 20);
+      triggerMemoryUpdate(fullHistory).catch(e => 
+        console.error('[poller] Memory trigger error:', e)
+      );
+    }
   } catch (error) {
     console.error(`[poller] Error on ${msg.id}:`, error);
   }

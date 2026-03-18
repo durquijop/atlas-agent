@@ -6,6 +6,7 @@ import { startPoller } from './poller';
 import { processBlackboard } from './blackboard';
 import { startMonitorCrons } from './agents/monitor';
 import { startRealtimeListener } from './realtime';
+import { startMemoryAgentCrons, triggerMemoryUpdate } from './agents/memory-agent';
 
 validateConfig();
 
@@ -44,6 +45,9 @@ app.listen(config.port, () => {
 
     // Context-driven proactivity: wake up when Monitor writes to blackboard
     startRealtimeListener();
+
+    // Memory Agent: nightly consolidation + triggered after conversations
+    startMemoryAgentCrons();
 
     // Fallback polling every 15min (catches any missed realtime events)
     cron.schedule('*/15 * * * *', () => {
