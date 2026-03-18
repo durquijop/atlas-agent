@@ -337,17 +337,22 @@ export async function research(req: ResearchRequest): Promise<ResearchResult> {
 // El Orchestrator usa esto para detectar cuando Diego quiere investigación
 
 const RESEARCH_TRIGGERS = [
-  // Investigación de persona
-  { pattern: /investiga(?:r)?\s+a\s+(.+)/i, type: 'person' as ResearchType },
-  { pattern: /busca\s+info(?:rmación)?\s+(?:sobre|de)\s+(.+)/i, type: 'general' as ResearchType },
+  // Investigación de persona — flexible, acepta palabras entre "investiga" y el nombre
+  { pattern: /investiga(?:r)?(?:\s+\w+){0,3}\s+a\s+(.+)/i, type: 'person' as ResearchType },
+  { pattern: /investiga(?:r)?\s+(?:sobre|a)\s+(.+)/i, type: 'person' as ResearchType },
+  { pattern: /investiga(?:r)?\s+(.+)/i, type: 'general' as ResearchType },
+  { pattern: /busca\s+info(?:rmación)?\s+(?:sobre|de|acerca\s+de)?\s*(.+)/i, type: 'general' as ResearchType },
+  { pattern: /busca(?:r)?\s+(?:sobre|a)\s+(.+)/i, type: 'general' as ResearchType },
   { pattern: /quién\s+es\s+(.+)/i, type: 'person' as ResearchType },
-  { pattern: /(?:reunión|meeting|call)\s+con\s+(.+)/i, type: 'person' as ResearchType },
+  { pattern: /(?:reunión|meeting|call|cita)\s+con\s+(.+)/i, type: 'person' as ResearchType },
   // Investigación de empresa
-  { pattern: /analiza(?:r)?\s+(?:la\s+empresa\s+)?(.+)/i, type: 'company' as ResearchType },
+  { pattern: /analiza(?:r)?\s+(?:la\s+empresa\s+|al?\s+)?(.+)/i, type: 'company' as ResearchType },
   { pattern: /compet(?:idor|encia)\s+(.+)/i, type: 'company' as ResearchType },
+  { pattern: /dime\s+(?:algo\s+)?(?:sobre|de)\s+la\s+empresa\s+(.+)/i, type: 'company' as ResearchType },
   // Noticias
-  { pattern: /noticias?\s+(?:sobre|de)\s+(.+)/i, type: 'news' as ResearchType },
+  { pattern: /noticias?\s+(?:sobre|de|acerca\s+de)\s+(.+)/i, type: 'news' as ResearchType },
   { pattern: /qué\s+(?:hay|pasó|está\s+pasando)\s+con\s+(.+)/i, type: 'news' as ResearchType },
+  { pattern: /qué\s+se\s+sabe\s+(?:de|sobre)\s+(.+)/i, type: 'news' as ResearchType },
   // Fact check
   { pattern: /(?:es\s+verdad|verifica|fact.?check)\s+(?:que\s+)?(.+)/i, type: 'fact_check' as ResearchType },
   // Mercado
