@@ -1,6 +1,7 @@
 import { config } from './config';
 import { ConversationMessage, getBusinessSnapshot } from './supabase';
 import { buildSystemContext, getConfigValue } from './memory';
+import { getEpisodicContext } from './agents/memory-agent';
 
 // Fallback prompt if Supabase memory table doesn't exist yet
 const FALLBACK_PROMPT = `Eres Atlas, el mentor CEO personal de Diego Urquijo.
@@ -28,6 +29,12 @@ export async function generateResponse(
   }
 
   const systemParts = [systemPrompt];
+
+  // Always include recent episodic context (last 2 weeks)
+  try {
+    const episodic = await getEpisodicContext();
+    if (episodic) systemParts.push(episodic);
+  } catch (_) {}
 
   if (includeBusinessData) {
     try {

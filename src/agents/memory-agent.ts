@@ -1,290 +1,398 @@
 /**
- * Memory Agent — Atlas Multi-Agent System
- * 
- * El ÚNICO agente con permiso de escritura en atlas_memory.
- * Responsabilidades:
- *   - Analizar conversaciones y decidir qué vale la pena recordar
- *   - Detectar cambios en preferencias, proyectos, personas, decisiones
- *   - Actualizar contexto de Diego automáticamente
- *   - Consolidar memorias duplicadas o contradictorias
- *   - Olvidar lo que ya no es relevante
- * 
+ * Memory Agent v2 — Atlas Multi-Agent System
+ *
+ * Sistema de memoria de 3 capas:
+ *   L1 — Working Memory: últimas 20 interacciones (en RAM, efímero)
+ *   L2 — Episodic Memory: eventos y conversaciones relevantes (Supabase, 90 días)
+ *   L3 — Semantic Memory: conocimiento permanente sobre Diego (Supabase, sin expiración)
+ *
+ * El Memory Agent es el ÚNICO con permiso de escritura.
+ * Los demás agentes solo leen vía getRelevantContext().
+ *
  * Corre:
- *   - Después de cada conversación significativa (triggered por Orchestrator)
- *   - Nightly a las 2AM para consolidación
+ *   - Trigger: cada 5 mensajes (post-conversación)
+ *   - Nightly 2AM: consolidación, limpieza, resumen episódico
  */
 
 import cron from 'node-cron';
 import { createClient } from '@supabase/supabase-js';
 import { config } from '../config';
 import { generateResponse } from '../llm';
-import { saveMemory, listMemory, deleteMemory, getCoreMemory } from '../memory';
 
 const supabase = createClient(config.supabaseUrl, config.supabaseKey);
 
-// ── Types ──
+// ── SCHEMA DE MEMORIA ──
+// L2: atlas_episodic_memory  (eventos con expiración)
+// L3: atlas_memory           (conocimiento permanente, ya existe)
 
-interface ConversationToProcess {
-  id: number;
-  messages: { role: string; content: string }[];
-  phone: string;
-  processed_at: string | null;
-}
+// ── EXTRACTORES DE ENTIDADES ──
+// Qué tipos de información merecen memoria permanente (L3)
 
-interface MemoryDecision {
-  action: 'save' | 'update' | 'delete' | 'ignore';
-  category: 'soul' | 'context' | 'knowledge' | 'config';
-  title: string;
+const ENTITY_EXTRACTORS = {
+  persona: {
+    description: 'Persona mencionada con contexto relevante',
+    trigger: ['conocí a', 'habló con', 'reunión con', 'llamó', 'escribió', 'socio', 'cliente', 'empleado', 'contacto'],
+    category: 'knowledge' as const,
+  },
+  decision: {
+    description: 'Decisión importante tomada por Diego',
+    trigger: ['decidí', 'vamos a', 'confirmé', 'acordamos', 'cerramos', 'firmamos', 'cancelamos', 'pausamos'],
+    category: 'context' as const,
+  },
+  proyecto: {
+    description: 'Proyecto o empresa con estado actualizado',
+    trigger: ['proyecto', 'empresa', 'negocio', 'startup', 'deal', 'contrato', 'inversión', 'socio'],
+    category: 'context' as const,
+  },
+  preferencia: {
+    description: 'Cómo Diego quiere que Atlas se comporte',
+    trigger: ['no me gusta', 'prefiero', 'siempre', 'nunca', 'quiero que', 'no quiero', 'cambia'],
+    category: 'soul' as const,
+  },
+  dato_financiero: {
+    description: 'Número financiero importante',
+    trigger: ['recaudo', 'facturó', 'invertimos', 'cuesta', 'presupuesto', 'deuda', 'ingresos'],
+    category: 'knowledge' as const,
+  },
+};
+
+// ── L1: WORKING MEMORY (en RAM) ──
+
+interface WorkingMemoryEntry {
+  timestamp: number;
+  role: 'user' | 'assistant';
   content: string;
-  tags: string[];
-  reason: string;
+  importance: number; // 0-10
 }
 
-// ── Core: analyze conversation and extract memories ──
+class WorkingMemory {
+  private entries: WorkingMemoryEntry[] = [];
+  private readonly maxSize = 30;
 
-const MEMORY_ANALYST_PROMPT = `Eres el Memory Agent de Atlas, el asistente de Diego Urquijo.
-
-Tu trabajo: analizar conversaciones y decidir qué información merece ser guardada en memoria permanente.
-
-CATEGORÍAS DE MEMORIA:
-- soul: quién es Diego, sus valores, cómo quiere que Atlas se comporte
-- context: proyectos activos, personas clave, situaciones actuales, prioridades
-- knowledge: información factual que Atlas debe recordar (datos de empresas, contactos, decisiones tomadas)
-- config: preferencias técnicas, configuraciones, instrucciones de comportamiento
-
-REGLAS DE DECISIÓN:
-✅ GUARDAR si:
-- Diego mencionó algo nuevo sobre sus proyectos o empresas
-- Tomó una decisión importante
-- Cambió de opinión sobre algo que antes estaba documentado
-- Mencionó a una persona nueva con contexto relevante
-- Dio una instrucción sobre cómo quiere que Atlas se comporte
-- Compartió información financiera, legal o estratégica relevante
-
-❌ IGNORAR si:
-- Es conversación casual sin información nueva
-- Ya está documentado sin cambios
-- Es información temporal (clima, noticias del día)
-- Es una pregunta sin respuesta significativa
-
-FORMATO DE RESPUESTA — JSON array:
-[
-  {
-    "action": "save" | "update" | "delete" | "ignore",
-    "category": "soul" | "context" | "knowledge" | "config",
-    "title": "Título corto y descriptivo",
-    "content": "Contenido completo a guardar",
-    "tags": ["tag1", "tag2"],
-    "reason": "Por qué es importante guardar esto"
+  add(role: 'user' | 'assistant', content: string, importance = 5): void {
+    this.entries.push({ timestamp: Date.now(), role, content, importance });
+    if (this.entries.length > this.maxSize) {
+      // Keep high-importance entries, drop low-importance old ones
+      this.entries.sort((a, b) => b.importance - a.importance || b.timestamp - a.timestamp);
+      this.entries = this.entries.slice(0, this.maxSize);
+      this.entries.sort((a, b) => a.timestamp - b.timestamp);
+    }
   }
-]
 
-Si no hay nada que guardar, devuelve: []`;
+  getRecent(n = 20): WorkingMemoryEntry[] {
+    return this.entries.slice(-n);
+  }
 
-export async function analyzeConversation(
+  getHighImportance(threshold = 7): WorkingMemoryEntry[] {
+    return this.entries.filter(e => e.importance >= threshold);
+  }
+
+  clear(): void {
+    this.entries = [];
+  }
+}
+
+export const workingMemory = new WorkingMemory();
+
+// ── L2: EPISODIC MEMORY ──
+
+interface EpisodicEntry {
+  id?: number;
+  session_date: string;          // YYYY-MM-DD
+  summary: string;               // Resumen de la conversación
+  key_topics: string[];          // Temas principales
+  decisions_made: string[];      // Decisiones tomadas
+  people_mentioned: string[];    // Personas mencionadas
+  sentiment: 'positive' | 'neutral' | 'negative' | 'stressed';
+  importance: number;            // 1-10
+  expires_at: string;            // 90 días por defecto
+}
+
+async function saveEpisodicMemory(entry: Omit<EpisodicEntry, 'id'>): Promise<void> {
+  const { error } = await supabase.from('atlas_episodic_memory').insert(entry);
+  if (error) console.error('[memory-agent] Episodic save error:', error.message);
+}
+
+async function getRecentEpisodic(days = 30): Promise<EpisodicEntry[]> {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+    .toISOString().split('T')[0];
+
+  const { data } = await supabase
+    .from('atlas_episodic_memory')
+    .select('*')
+    .gte('session_date', since)
+    .order('importance', { ascending: false })
+    .order('session_date', { ascending: false })
+    .limit(10);
+
+  return (data || []) as EpisodicEntry[];
+}
+
+// ── L3: SEMANTIC MEMORY ──
+
+async function getSemanticMemory(category?: string): Promise<{ title: string; content: string; category: string }[]> {
+  let query = supabase
+    .from('atlas_memory')
+    .select('title, content, category')
+    .order('updated_at', { ascending: false });
+
+  if (category) query = query.eq('category', category);
+
+  const { data } = await query.limit(50);
+  return (data || []) as { title: string; content: string; category: string }[];
+}
+
+async function upsertSemanticMemory(
+  category: 'soul' | 'context' | 'knowledge' | 'config',
+  title: string,
+  content: string,
+  tags: string[]
+): Promise<void> {
+  const { data: existing } = await supabase
+    .from('atlas_memory')
+    .select('id, content')
+    .eq('category', category)
+    .eq('title', title)
+    .single();
+
+  if (existing) {
+    // Merge: don't overwrite, append what's new
+    const mergedContent = existing.content === content
+      ? content
+      : `${existing.content}\n\n[Actualizado ${new Date().toLocaleDateString('es')}]: ${content}`;
+
+    await supabase
+      .from('atlas_memory')
+      .update({ content: mergedContent, tags, updated_at: new Date().toISOString() })
+      .eq('id', existing.id);
+  } else {
+    await supabase
+      .from('atlas_memory')
+      .insert({ category, title, content, tags });
+  }
+}
+
+// ── CORE: ANALIZAR CONVERSACIÓN ──
+
+const MEMORY_EXTRACTION_PROMPT = `Eres el Memory Agent de Atlas. Analizas conversaciones entre Diego y Atlas y extraes lo que vale la pena recordar permanentemente.
+
+Diego Urquijo es: CEO de URPE Integral Services (inmigración USA) y URPE AI Lab. Vive en Cumming, GA. Tiene familia (Simón, Samantha). Es emprendedor serial, barranquillero, ambicioso.
+
+EXTRAE SOLO lo que sea:
+1. NUEVO (no está en la memoria actual)
+2. PERMANENTE (sigue siendo relevante en 6 meses)
+3. ACCIONABLE (cambia cómo Atlas debe comportarse o qué debe saber)
+
+NO extraigas:
+- Conversación casual sin información nueva
+- Información temporal (precios del día, clima, noticias)
+- Cosas que ya están documentadas sin cambio
+- Preguntas sin respuesta significativa
+
+FORMATO DE RESPUESTA (JSON):
+{
+  "semantic_updates": [
+    {
+      "category": "soul|context|knowledge|config",
+      "title": "Título corto (máx 50 chars)",
+      "content": "Contenido completo y útil",
+      "tags": ["tag1", "tag2"],
+      "why": "Por qué es importante recordar esto"
+    }
+  ],
+  "episodic_summary": {
+    "summary": "Resumen de la conversación en 2-3 líneas",
+    "key_topics": ["tema1", "tema2"],
+    "decisions_made": ["decisión1"],
+    "people_mentioned": ["nombre1"],
+    "sentiment": "positive|neutral|negative|stressed",
+    "importance": 1-10
+  },
+  "behavior_updates": [
+    {
+      "instruction": "Instrucción concreta para Atlas",
+      "reason": "Por qué cambiar el comportamiento"
+    }
+  ]
+}
+
+Si no hay nada nuevo, devuelve: {"semantic_updates": [], "episodic_summary": null, "behavior_updates": []}`;
+
+interface ExtractionResult {
+  semantic_updates: {
+    category: 'soul' | 'context' | 'knowledge' | 'config';
+    title: string;
+    content: string;
+    tags: string[];
+    why: string;
+  }[];
+  episodic_summary: {
+    summary: string;
+    key_topics: string[];
+    decisions_made: string[];
+    people_mentioned: string[];
+    sentiment: 'positive' | 'neutral' | 'negative' | 'stressed';
+    importance: number;
+  } | null;
+  behavior_updates: {
+    instruction: string;
+    reason: string;
+  }[];
+}
+
+async function extractFromConversation(
   messages: { role: string; content: string }[],
-  existingMemory: string
-): Promise<MemoryDecision[]> {
-  if (messages.length < 2) return [];
-
+  existingMemorySnapshot: string
+): Promise<ExtractionResult> {
   const conversation = messages
+    .slice(-30) // Últimos 30 mensajes
     .map(m => `${m.role === 'user' ? 'Diego' : 'Atlas'}: ${m.content}`)
     .join('\n');
 
-  const prompt = `Analiza esta conversación y decide qué guardar en memoria:
-
-CONVERSACIÓN:
+  const prompt = `CONVERSACIÓN A ANALIZAR:
 ${conversation}
 
 MEMORIA ACTUAL (para evitar duplicados):
-${existingMemory}
+${existingMemorySnapshot}
 
-Responde con JSON array de decisiones.`;
+Extrae lo que vale la pena recordar. Responde en JSON.`;
 
   try {
     const response = await generateResponse(
       [{ role: 'user' as const, content: prompt }],
-      MEMORY_ANALYST_PROMPT,
+      MEMORY_EXTRACTION_PROMPT,
       false
     );
 
-    const jsonMatch = response.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return [];
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return { semantic_updates: [], episodic_summary: null, behavior_updates: [] };
 
-    const decisions = JSON.parse(jsonMatch[0]) as MemoryDecision[];
-    return decisions.filter(d => d.action !== 'ignore');
-
+    return JSON.parse(jsonMatch[0]) as ExtractionResult;
   } catch (e) {
-    console.error('[memory-agent] analyzeConversation error:', e);
-    return [];
+    console.error('[memory-agent] Extraction error:', e);
+    return { semantic_updates: [], episodic_summary: null, behavior_updates: [] };
   }
 }
 
-// ── Apply memory decisions ──
+// ── CONSOLIDACIÓN NOCTURNA ──
 
-export async function applyMemoryDecisions(decisions: MemoryDecision[]): Promise<string[]> {
-  const results: string[] = [];
+async function consolidateAndClean(): Promise<void> {
+  console.log('[memory-agent] Starting nightly consolidation...');
 
-  for (const decision of decisions) {
-    try {
-      if (decision.action === 'save' || decision.action === 'update') {
-        const result = await saveMemory({
-          category: decision.category,
-          title: decision.title,
-          content: decision.content,
-          tags: decision.tags,
-        });
-        results.push(result);
-        console.log(`[memory-agent] ${result} — ${decision.reason}`);
+  const allMemory = await getSemanticMemory();
+  if (allMemory.length === 0) return;
 
-      } else if (decision.action === 'delete') {
-        const result = await deleteMemory(decision.title);
-        results.push(result);
-        console.log(`[memory-agent] ${result}`);
-      }
-    } catch (e) {
-      console.error(`[memory-agent] Error applying decision for "${decision.title}":`, e);
+  // Find duplicates using simple title similarity
+  const seen = new Map<string, typeof allMemory[0]>();
+  const duplicates: string[] = [];
+
+  for (const entry of allMemory) {
+    const key = entry.title.toLowerCase().replace(/\s+/g, '');
+    if (seen.has(key)) {
+      duplicates.push(entry.title);
+    } else {
+      seen.set(key, entry);
     }
   }
 
-  return results;
-}
-
-// ── Process recent conversations ──
-
-async function processRecentConversations(): Promise<void> {
-  try {
-    // Get conversations from the last 24h that haven't been processed by memory agent
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-
-    const { data: conversations } = await supabase
-      .from('wp_conversaciones')
-      .select('id, created_at')
-      .eq('agente_id', 100) // Atlas agent ID
-      .gte('created_at', yesterday)
-      .order('created_at', { ascending: false })
-      .limit(5);
-
-    if (!conversations || conversations.length === 0) {
-      console.log('[memory-agent] No conversations to process');
-      return;
-    }
-
-    // Get current memory as context
-    const coreMemory = await getCoreMemory();
-    const existingMemory = coreMemory
-      .map(m => `[${m.category}] ${m.title}: ${m.content.substring(0, 200)}`)
-      .join('\n');
-
-    let totalSaved = 0;
-
-    for (const conv of conversations) {
-      // Get messages for this conversation
-      const { data: messages } = await supabase
-        .from('wp_mensajes')
-        .select('remitente, contenido')
-        .eq('conversacion_id', conv.id)
-        .order('created_at', { ascending: true })
-        .limit(50);
-
-      if (!messages || messages.length < 4) continue; // Skip short conversations
-
-      const formattedMessages = messages.map(m => ({
-        role: m.remitente === 'usuario' ? 'user' : 'assistant',
-        content: m.contenido,
-      }));
-
-      const decisions = await analyzeConversation(formattedMessages, existingMemory);
-
-      if (decisions.length > 0) {
-        const results = await applyMemoryDecisions(decisions);
-        totalSaved += results.length;
-        console.log(`[memory-agent] Conv ${conv.id}: ${results.length} memories saved`);
-      }
-    }
-
-    console.log(`[memory-agent] Nightly consolidation complete: ${totalSaved} total memories updated`);
-
-  } catch (e) {
-    console.error('[memory-agent] processRecentConversations error:', e);
+  if (duplicates.length > 0) {
+    console.log(`[memory-agent] Found ${duplicates.length} potential duplicates`);
+    // TODO: merge logic (phase 2)
   }
-}
 
-// ── Nightly consolidation: merge duplicates, remove stale ──
+  // Clean expired episodic memories
+  const now = new Date().toISOString();
+  const { data: expired } = await supabase
+    .from('atlas_episodic_memory')
+    .delete()
+    .lt('expires_at', now)
+    .select('id');
 
-async function consolidateMemory(): Promise<void> {
-  try {
-    const allMemory = await listMemory();
-    if (allMemory.length === 0) return;
-
-    const memoryList = allMemory
-      .map(m => `[${m.id}] [${m.category}] ${m.title}: ${m.content.substring(0, 150)}`)
-      .join('\n');
-
-    const consolidatePrompt = `Eres el Memory Agent. Revisa esta lista de memorias y detecta:
-1. Duplicados (mismo concepto con distintos títulos)
-2. Información contradictoria (dos memorias dicen cosas distintas sobre lo mismo)
-3. Memorias obsoletas (información que claramente ya no es relevante)
-
-MEMORIAS ACTUALES:
-${memoryList}
-
-Responde con JSON array. Solo incluye memorias que necesiten acción (delete/update).
-Si todo está bien, devuelve: []`;
-
-    const response = await generateResponse(
-      [{ role: 'user' as const, content: consolidatePrompt }],
-      MEMORY_ANALYST_PROMPT,
-      false
-    );
-
-    const jsonMatch = response.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return;
-
-    const decisions = JSON.parse(jsonMatch[0]) as MemoryDecision[];
-    const actionable = decisions.filter(d => d.action !== 'ignore' && d.action !== 'save');
-
-    if (actionable.length > 0) {
-      await applyMemoryDecisions(actionable);
-      console.log(`[memory-agent] Consolidation: ${actionable.length} changes made`);
-    }
-
-  } catch (e) {
-    console.error('[memory-agent] consolidateMemory error:', e);
+  if (expired && expired.length > 0) {
+    console.log(`[memory-agent] Cleaned ${expired.length} expired episodic memories`);
   }
+
+  console.log('[memory-agent] Nightly consolidation complete');
 }
 
-// ── Public API: called by Orchestrator after significant conversations ──
+// ── API PÚBLICA ──
 
 export async function triggerMemoryUpdate(
   messages: { role: string; content: string }[]
 ): Promise<void> {
+  if (messages.length < 4) return; // No procesar conversaciones muy cortas
+
   try {
-    const coreMemory = await getCoreMemory();
-    const existingMemory = coreMemory
-      .map(m => `[${m.category}] ${m.title}: ${m.content.substring(0, 200)}`)
+    // Snapshot de memoria actual para el prompt
+    const semantic = await getSemanticMemory();
+    const memorySnapshot = semantic
+      .slice(0, 20)
+      .map(m => `[${m.category}] ${m.title}: ${m.content.substring(0, 150)}`)
       .join('\n');
 
-    const decisions = await analyzeConversation(messages, existingMemory);
+    const result = await extractFromConversation(messages, memorySnapshot);
 
-    if (decisions.length > 0) {
-      const results = await applyMemoryDecisions(decisions);
-      console.log(`[memory-agent] Triggered update: ${results.length} memories saved`);
+    // Guardar actualizaciones semánticas (L3)
+    for (const update of result.semantic_updates) {
+      await upsertSemanticMemory(update.category, update.title, update.content, update.tags);
+      console.log(`[memory-agent] L3 saved: [${update.category}] ${update.title} — ${update.why}`);
     }
+
+    // Guardar behavior updates como instrucciones de soul
+    for (const behavior of result.behavior_updates) {
+      await upsertSemanticMemory(
+        'soul',
+        `Instrucción: ${behavior.instruction.substring(0, 40)}`,
+        behavior.instruction,
+        ['behavior', 'instruction']
+      );
+      console.log(`[memory-agent] Behavior update: ${behavior.instruction}`);
+    }
+
+    // Guardar episodic summary (L2)
+    if (result.episodic_summary && result.episodic_summary.importance >= 4) {
+      const expires = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      await saveEpisodicMemory({
+        session_date: new Date().toISOString().split('T')[0],
+        summary: result.episodic_summary.summary,
+        key_topics: result.episodic_summary.key_topics,
+        decisions_made: result.episodic_summary.decisions_made,
+        people_mentioned: result.episodic_summary.people_mentioned,
+        sentiment: result.episodic_summary.sentiment,
+        importance: result.episodic_summary.importance,
+        expires_at: expires,
+      });
+      console.log(`[memory-agent] L2 episodic saved: importance=${result.episodic_summary.importance}`);
+    }
+
+    const total = result.semantic_updates.length + result.behavior_updates.length;
+    if (total > 0) {
+      console.log(`[memory-agent] Update complete: ${total} semantic, ${result.episodic_summary ? 1 : 0} episodic`);
+    }
+
   } catch (e) {
     console.error('[memory-agent] triggerMemoryUpdate error:', e);
   }
 }
 
-// ── Cron scheduler ──
+// Exponer función para que el LLM pueda incluir contexto episódico
+export async function getEpisodicContext(): Promise<string> {
+  const recent = await getRecentEpisodic(14); // Últimas 2 semanas
+  if (recent.length === 0) return '';
+
+  return '\n## Contexto reciente (últimas sesiones)\n' +
+    recent
+      .slice(0, 5)
+      .map(e => `[${e.session_date}] ${e.summary} (temas: ${e.key_topics.join(', ')})`)
+      .join('\n');
+}
 
 export function startMemoryAgentCrons(): void {
-  // Nightly at 2AM: process recent conversations + consolidate
+  // Nightly 2AM: consolidación + limpieza
   cron.schedule('0 2 * * *', async () => {
     console.log('[memory-agent] Starting nightly cycle');
-    await processRecentConversations();
-    await consolidateMemory();
+    await consolidateAndClean();
   }, { timezone: 'America/New_York' });
 
-  console.log('[memory-agent] Cron scheduled: nightly at 2AM ET');
+  console.log('[memory-agent] Crons scheduled: nightly 2AM ET');
 }
