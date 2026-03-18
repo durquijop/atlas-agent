@@ -5,6 +5,7 @@ import { startProactiveCrons } from './proactive';
 import { startPoller } from './poller';
 import { processBlackboard } from './blackboard';
 import { startMonitorCrons } from './agents/monitor';
+import { startRealtimeListener } from './realtime';
 
 validateConfig();
 
@@ -41,16 +42,19 @@ app.listen(config.port, () => {
     startProactiveCrons();
     startPoller();
 
-    // Read blackboard every 15 min
+    // Context-driven proactivity: wake up when Monitor writes to blackboard
+    startRealtimeListener();
+
+    // Fallback polling every 15min (catches any missed realtime events)
     cron.schedule('*/15 * * * *', () => {
       processBlackboard().catch(console.error);
     });
 
-    // Also read blackboard on startup after 10s
+    // Process any pending events on startup
     setTimeout(() => {
       processBlackboard().catch(console.error);
     }, 10000);
 
-    console.log('[atlas] Orchestrator started — blackboard polling every 15min');
+    console.log('[atlas] Orchestrator started — context-driven (Realtime) + fallback polling (15min)');
   }
 });
