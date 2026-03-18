@@ -11,6 +11,8 @@ import { createClient } from '@supabase/supabase-js';
 import { config } from './config';
 import { generateResponse } from './llm';
 import { sendText } from './whatsapp';
+import { runCritic } from './agents/critic';
+import { getAutonomyLevel, getRecentRejects, recordOutcome } from './agents/learning';
 
 const supabase = createClient(config.supabaseUrl, config.supabaseKey);
 const OWNER = config.ownerNumbers[0];
@@ -83,13 +85,43 @@ async function processEvent(event: BlackboardEvent): Promise<void> {
   try {
     await markEvent(event.id, 'processing');
 
+    // 1. Draft the message
     const prompt = buildPrompt(event);
-    const response = await generateResponse([], prompt, true);
-    
-    await sendText(OWNER, response);
+    const draft = await generateResponse([], prompt, true);
+
+    // 2. Get autonomy context for Critic
+    const autonomyLevel = await getAutonomyLevel(event.event_type);
+    const recentRejects = await getRecentRejects(event.event_type);
+
+    // 3. Run Critic before sending
+    const criticResult = await runCritic(draft, {
+      eventType: event.event_type,
+      priority: event.priority,
+      originalTitle: event.title,
+      recentRejects,
+    });
+
+    if (criticResult.verdict === 'BLOCKED') {
+      console.log(`[blackboard] BLOCKED by Critic: ${criticResult.reasoning}`);
+      await markEvent(event.id, 'dismissed');
+      await recordOutcome(event.id, event.event_type, 'ignored', `Blocked by Critic: ${criticResult.reasoning}`);
+      return;
+    }
+
+    // 4. Use Critic's output (original or reformulated)
+    const finalMessage = criticResult.output || draft;
+
+    // 5. Send to Diego (only if autonomy level allows or CRITICAL)
+    if (autonomyLevel <= 2 || event.priority === 'CRITICAL') {
+      await sendText(OWNER, finalMessage);
+      console.log(`[blackboard] Sent [${event.priority}] ${event.title} (Critic: ${criticResult.verdict})`);
+    } else {
+      console.log(`[blackboard] Level 3 — holding for approval: ${event.title}`);
+      // TODO: store in pending_approvals table for next Diego interaction
+    }
+
     await markEvent(event.id, 'done');
 
-    console.log(`[blackboard] Processed [${event.priority}] ${event.title}`);
   } catch (err) {
     console.error(`[blackboard] Error processing event ${event.id}:`, err);
     await markEvent(event.id, 'pending'); // retry later
