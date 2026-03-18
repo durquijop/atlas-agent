@@ -14,24 +14,15 @@
 import cron from 'node-cron';
 import { createClient } from '@supabase/supabase-js';
 import { config } from '../config';
+import { getGoogleAccessToken } from '../google-auth';
 
 const supabase = createClient(config.supabaseUrl, config.supabaseKey);
-
-// ── Gmail API via Service Account o tokens gog ──
 
 const GMAIL_ACCOUNTS = [
   { email: 'dau@urpeailab.com', label: 'AI Lab' },
   { email: 'dau@urpeintegralservices.co', label: 'URPE IS' },
   { email: 'du@soydiegoup.com', label: 'SoyDiegoUp' },
 ];
-
-const GOOGLE_SERVICE_ACCOUNT = process.env.GOOGLE_SERVICE_ACCOUNT
-  ? JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT)
-  : null;
-
-const GOOGLE_OAUTH_TOKENS = process.env.GOOGLE_OAUTH_TOKENS
-  ? JSON.parse(process.env.GOOGLE_OAUTH_TOKENS)
-  : null;
 
 // Priority keywords in subject/sender for email classification
 const CRITICAL_KEYWORDS = ['urgent', 'urgente', 'overdue', 'vencida', 'shutdown', 'suspended', 'crashed', 'failed', 'payment failure', 'action required'];
@@ -44,35 +35,10 @@ function classifyEmailPriority(subject: string, from: string): 'CRITICAL' | 'HIG
   return 'MEDIUM';
 }
 
-async function getGmailAccessToken(email: string): Promise<string | null> {
-  // Option A: Service Account with domain-wide delegation
-  if (GOOGLE_SERVICE_ACCOUNT) {
-    try {
-      const { GoogleAuth } = await import('google-auth-library');
-      const auth = new GoogleAuth({
-        credentials: GOOGLE_SERVICE_ACCOUNT,
-        scopes: ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/calendar.readonly'],
-      });
-      const client = await auth.getClient() as any;
-      // Impersonate user
-      client.subject = email;
-      const token = await client.getAccessToken();
-      return token.token;
-    } catch (e) {
-      console.error(`[monitor] Service account auth failed for ${email}:`, e);
-    }
-  }
 
-  // Option B: Pre-stored OAuth tokens from env
-  if (GOOGLE_OAUTH_TOKENS && GOOGLE_OAUTH_TOKENS[email]) {
-    return GOOGLE_OAUTH_TOKENS[email].access_token;
-  }
-
-  return null;
-}
 
 async function checkGmailAccount(email: string, label: string): Promise<void> {
-  const token = await getGmailAccessToken(email);
+  const token = await getGoogleAccessToken(email);
   if (!token) {
     console.log(`[monitor] No token for ${email}, skipping`);
     return;
@@ -127,7 +93,7 @@ async function checkGmailAccount(email: string, label: string): Promise<void> {
 }
 
 async function checkCalendar(email: string, label: string): Promise<void> {
-  const token = await getGmailAccessToken(email);
+  const token = await getGoogleAccessToken(email);
   if (!token) return;
 
   try {
