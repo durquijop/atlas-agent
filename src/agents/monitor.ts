@@ -16,9 +16,6 @@ import { createClient } from '@supabase/supabase-js';
 import { config } from '../config';
 import { getGoogleAccessToken } from '../google-auth';
 
-console.log('[monitor] Supabase URL:', config.supabaseUrl);
-console.log('[monitor] Supabase KEY (first 30):', config.supabaseKey?.substring(0, 30));
-console.log('[monitor] Supabase KEY length:', config.supabaseKey?.length);
 const supabase = createClient(config.supabaseUrl, config.supabaseKey);
 
 const GMAIL_ACCOUNTS = [
