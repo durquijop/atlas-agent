@@ -83,6 +83,39 @@ async function firecrawlSearch(query: string, limit = 5): Promise<{ url: string;
   }));
 }
 
+function generateFallbackQueries(query: string, type: ResearchType): string[] {
+  // Remove common prepositions that confuse search
+  const clean = query
+    .replace(/\s+de\s+/gi, ' ')
+    .replace(/\s+del\s+/gi, ' ')
+    .replace(/\.com/gi, '')
+    .trim();
+
+  const parts = clean.split(/\s+/);
+  const fallbacks: string[] = [];
+
+  // Try name only (first 2-3 words)
+  if (parts.length > 2) {
+    fallbacks.push(parts.slice(0, 2).join(' '));
+    fallbacks.push(parts.slice(0, 3).join(' '));
+  }
+
+  // Try with LinkedIn
+  fallbacks.push(`${parts.slice(0, 2).join(' ')} LinkedIn`);
+
+  // Try with company name separately
+  if (type === 'person' && parts.length > 2) {
+    const company = parts.slice(-1)[0];
+    fallbacks.push(`${parts.slice(0, 2).join(' ')} ${company} CEO`);
+    fallbacks.push(`${company} media director`);
+  }
+
+  // Try in English
+  fallbacks.push(`${clean} media executive`);
+
+  return [...new Set(fallbacks)]; // Remove duplicates
+}
+
 async function firecrawlScrape(url: string): Promise<string> {
   const res = await fetch(`${FIRECRAWL_BASE}/scrape`, {
     method: 'POST',
@@ -251,18 +284,31 @@ export async function research(req: ResearchRequest): Promise<ResearchResult> {
     }
   }
 
-  // Si no hay resultados, intentar búsqueda alternativa
+  // Si no hay resultados, intentar queries alternativos
   if (results.length === 0) {
-    console.warn(`[research] No results for: ${req.query}`);
-    return {
-      query: req.query,
-      type: req.type,
-      summary: `No encontré información suficiente sobre "${req.query}".`,
-      key_findings: [],
-      sources: [],
-      confidence: 'low',
-      timestamp: new Date().toISOString(),
-    };
+    console.warn(`[research] No results for: "${req.query}" — trying fallback queries`);
+
+    const fallbackQueries = generateFallbackQueries(req.query, req.type);
+    for (const fallback of fallbackQueries) {
+      console.log(`[research] Trying fallback: "${fallback}"`);
+      const fallbackResults = await firecrawlSearch(fallback, 3);
+      if (fallbackResults.length > 0) {
+        results.push(...fallbackResults);
+        break;
+      }
+    }
+
+    if (results.length === 0) {
+      return {
+        query: req.query,
+        type: req.type,
+        summary: `No encontré información pública sobre "${req.query}". Puede ser una persona o empresa con poca presencia web, o el nombre exacto puede ser diferente.`,
+        key_findings: [],
+        sources: [],
+        confidence: 'low',
+        timestamp: new Date().toISOString(),
+      };
+    }
   }
 
   const prompt = buildResearchPrompt(req.type, req.query, req.context);
