@@ -41,36 +41,63 @@ const HIGH_KEYWORDS = [
   'subscription', 'suscripcion', 'cobro', 'cargo rechazado'
 ];
 
-// AUTO-DESCARTE: newsletters, marketing, notificaciones automáticas
-const NOISE_SENDERS = [
-  'noreply', 'no-reply', 'newsletter', 'notifications@', 'updates@',
-  'hello@', 'team@', 'info@', 'marketing@', 'digest@', 'weekly@',
-  'acm.org', 'ieee.org', 'medium.com', 'substack.com', 'mailchimp',
-  'constantcontact', 'sendgrid', 'klaviyo', 'hubspot', 'mailerlite'
+// ── Dominios conocidos de personas reales del equipo de Diego ──
+const TRUSTED_DOMAINS = [
+  'urpeintegralservices.co', 'urpeailab.com', 'soydiegoup.com',
+  'gmail.com', 'hotmail.com', 'outlook.com', 'yahoo.com', 'icloud.com'
 ];
 
-const NOISE_SUBJECTS = [
-  'newsletter', 'digest', 'weekly', 'roundup', 'update', 'webinar',
-  'invitation', 'join us', 'free', 'offer', 'deal', 'discount',
-  'unsubscribe', 'referral', 'you\'re invited', 'don\'t miss'
+// AUTO-DESCARTE: solo plataformas/servicios automáticos, NUNCA personas reales
+const NOISE_SENDERS = [
+  'noreply@', 'no-reply@', 'donotreply@', 'notifications@', 'newsletter@',
+  'updates@', 'marketing@', 'digest@', 'weekly@', 'hello@mailchimp',
+  'acm.org', 'ieee.org', 'medium.com', 'substack.com', 'mailchimp.com',
+  'constantcontact.com', 'sendgrid.net', 'klaviyo.com', 'hubspot.com',
+  'mailerlite.com', 'campaignmonitor.com', 'activecampaign.com'
 ];
+
+// AUTO-DESCARTE por subject: solo si el remitente NO es una persona real
+const NOISE_SUBJECTS_AUTOMATED = [
+  'newsletter', 'digest', 'weekly roundup', 'webinar reminder',
+  'unsubscribe', 'you\'re invited to a webinar', 'referral credits',
+  'promotional', 'special offer', 'limited time'
+];
+
+function isRealPerson(from: string): boolean {
+  const fromLower = from.toLowerCase();
+  // Si es un noreply/notificaciones automáticas → NO es persona real
+  if (NOISE_SENDERS.some(n => fromLower.includes(n))) return false;
+  // Si tiene nombre visible antes del email (ej: "Juan García <juan@...>") → sí es persona
+  if (from.includes('<') && !from.toLowerCase().includes('noreply')) return true;
+  // Si es dominio de persona real → sí
+  if (TRUSTED_DOMAINS.some(d => fromLower.includes(d))) return true;
+  return false;
+}
 
 function classifyEmailPriority(subject: string, from: string): 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' {
   const text = `${subject} ${from}`.toLowerCase();
   const subjectLower = subject.toLowerCase();
   const fromLower = from.toLowerCase();
 
-  // Auto-descarte: ruido conocido
+  // Plataformas automáticas conocidas → siempre LOW
   if (NOISE_SENDERS.some(n => fromLower.includes(n))) return 'LOW';
-  if (NOISE_SUBJECTS.some(n => subjectLower.includes(n))) return 'LOW';
 
-  // CRITICAL: acción urgente requerida
+  // Persona real → siempre pasa (mínimo MEDIUM)
+  if (isRealPerson(from)) {
+    // Si además tiene keywords críticos, sube la prioridad
+    if (CRITICAL_KEYWORDS.some(k => text.includes(k))) return 'CRITICAL';
+    if (HIGH_KEYWORDS.some(k => text.includes(k))) return 'HIGH';
+    return 'MEDIUM'; // Persona real sin urgencia → MEDIUM (pasa el filtro)
+  }
+
+  // Remitente desconocido: solo pasa si es crítico o tiene dinero de por medio
   if (CRITICAL_KEYWORDS.some(k => text.includes(k))) return 'CRITICAL';
-
-  // HIGH: dinero o deadline
   if (HIGH_KEYWORDS.some(k => text.includes(k))) return 'HIGH';
 
-  // Todo lo demás es LOW — no vale molestar a Diego
+  // Subjects claramente automatizados de remitentes desconocidos → LOW
+  if (NOISE_SUBJECTS_AUTOMATED.some(n => subjectLower.includes(n))) return 'LOW';
+
+  // Remitente desconocido sin urgencia → LOW
   return 'LOW';
 }
 
