@@ -361,13 +361,23 @@ const RESEARCH_TRIGGERS = [
 ];
 
 export function detectResearchIntent(message: string): ResearchRequest | null {
+  // Normalize: trim and check length
+  const msg = message.trim();
+  if (msg.length < 5 || msg.length > 500) return null;
+
   for (const trigger of RESEARCH_TRIGGERS) {
-    const match = message.match(trigger.pattern);
-    if (match) {
+    const match = msg.match(trigger.pattern);
+    if (match && match[1] && match[1].trim().length > 2) {
+      const query = match[1].trim()
+        .replace(/\s+/g, ' ')
+        .replace(/[.!?]+$/, ''); // Remove trailing punctuation
+
+      console.log(`[research-intent] Pattern matched: "${trigger.pattern}" → query: "${query}"`);
+
       return {
-        query: match[1].trim(),
+        query,
         type: trigger.type,
-        depth: message.toLowerCase().includes('detallad') || message.toLowerCase().includes('profund') ? 'deep' : 'quick',
+        depth: msg.toLowerCase().includes('detallad') || msg.toLowerCase().includes('profund') ? 'deep' : 'quick',
         saveToMemory: true,
       };
     }
